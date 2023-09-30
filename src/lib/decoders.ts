@@ -1,5 +1,6 @@
 import { Result } from '@ethersproject/abi';
 import BigNumber from 'bignumber.js';
+import { BigNumber as EthersBigNumber } from 'ethers';
 import { BytesLike, defaultAbiCoder } from 'ethers/lib/utils';
 import _, { parseInt } from 'lodash';
 import { BN_0 } from '../bignumber-constants';
@@ -28,12 +29,15 @@ export const extractSuccessAndValue = (
 export function generalDecoder<T>(
   result: MultiResult<BytesLike> | BytesLike,
   types: string[],
-  defaultValue: T,
+  defaultValue: T | undefined,
   parser?: (v: Result) => T,
 ): T {
   const [isSuccess, toDecode] = extractSuccessAndValue(result);
 
   if (!isSuccess || toDecode === '0x') {
+    if (defaultValue === undefined) {
+      throw new Error(`Failed to decode result: ${result}`);
+    }
     return defaultValue;
   }
 
@@ -45,6 +49,18 @@ export const uint256ToBigInt = (
   result: MultiResult<BytesLike> | BytesLike,
 ): bigint => {
   return generalDecoder(result, ['uint256'], 0n, value => value[0].toBigInt());
+};
+
+export const uint128ToBigNumber = (
+  result: MultiResult<BytesLike> | BytesLike,
+): EthersBigNumber => {
+  return generalDecoder(result, ['uint128'], 0n, value => value[0]);
+};
+
+export const int24ToNumber = (
+  result: MultiResult<BytesLike> | BytesLike,
+): number => {
+  return generalDecoder(result, ['int24'], 0n, value => value[0]);
 };
 
 export const uint256ArrayDecode = (
@@ -133,6 +149,14 @@ export const addressDecode = (
 ): string => {
   return generalDecoder(result, ['address'], NULL_ADDRESS, v =>
     v[0].toLowerCase(),
+  );
+};
+
+export const addressArrayDecode = (
+  result: MultiResult<BytesLike> | BytesLike,
+): string => {
+  return generalDecoder(result, ['address[]'], [], v =>
+    v[0].map((a: string) => a.toLowerCase()),
   );
 };
 

@@ -1,4 +1,5 @@
 import { Interface } from '@ethersproject/abi';
+import _ from 'lodash';
 import {
   Token,
   Address,
@@ -20,7 +21,10 @@ import {
   MaverickV1Param,
   SubgraphPoolBase,
 } from './types';
-import { SimpleExchange } from '../simple-exchange';
+import {
+  getLocalDeadlineAsFriendlyPlaceholder,
+  SimpleExchange,
+} from '../simple-exchange';
 import {
   MaverickV1Config,
   Adapters,
@@ -35,7 +39,6 @@ import {
 } from './subgraph-queries';
 import { SUBGRAPH_TIMEOUT } from '../../constants';
 import RouterABI from '../../abi/maverick-v1/router.json';
-import _ from 'lodash';
 
 const MAX_POOL_CNT = 1000;
 
@@ -75,6 +78,7 @@ export class MaverickV1
 
   async setupEventPools(blockNumber: number) {
     const pools = await this.fetchAllSubgraphPools();
+
     await Promise.all(
       pools.map(async (pool: any) => {
         const eventPool = new MaverickV1EventPool(
@@ -151,11 +155,15 @@ export class MaverickV1
   ): Promise<string[]> {
     const from = this.dexHelper.config.wrapETH(srcToken);
     const to = this.dexHelper.config.wrapETH(destToken);
+
+    if (from.address.toLowerCase() === to.address.toLowerCase()) {
+      return [];
+    }
+
     const pools = await this.getPools(from, to);
     return pools.map(
       (pool: any) => `${this.dexKey}_${pool.address.toLowerCase()}`,
     );
-    return [];
   }
 
   async getPools(srcToken: Token, destToken: Token) {
@@ -174,8 +182,17 @@ export class MaverickV1
   getCalldataGasCost(
     poolPrices: PoolPrices<MaverickV1Data>,
   ): number | number[] {
-    // TODO: update if there is any payload in getAdapterParam
-    return CALLDATA_GAS_COST.DEX_NO_PAYLOAD;
+    const gasCost = CALLDATA_GAS_COST.DEX_NO_PAYLOAD;
+
+    const arr = new Array(poolPrices.prices.length);
+    poolPrices.prices.forEach((p, index) => {
+      if (p == 0n) {
+        arr[index] = 0;
+      } else {
+        arr[index] = gasCost;
+      }
+    });
+    return arr;
   }
 
   // Returns pool prices for amounts.
@@ -193,6 +210,11 @@ export class MaverickV1
     try {
       const from = this.dexHelper.config.wrapETH(srcToken);
       const to = this.dexHelper.config.wrapETH(destToken);
+
+      if (from.address.toLowerCase() === to.address.toLowerCase()) {
+        return null;
+      }
+
       const allPools = await this.getPools(from, to);
 
       const allowedPools = limitPools
@@ -210,39 +232,55 @@ export class MaverickV1
         await Promise.all(
           allowedPools.map(async (pool: MaverickV1EventPool) => {
             try {
-              const [unit, _tickDiff] = pool.swap(
+              let state = pool.getState(blockNumber);
+              if (state === null) {
+                state = await pool.generateState(blockNumber);
+                pool.setState(state, blockNumber);
+              }
+              if (state === null) {
+                this.logger.debug(
+                  `Received null state for pool ${pool.address}`,
+                );
+                return null;
+              }
+
+              const [unit] = pool.swap(
                 unitAmount,
                 from,
                 to,
                 side == SwapSide.BUY,
               );
-              let dataList = await Promise.all(
-                amounts.map(amount =>
-                  pool.swap(amount, from, to, side == SwapSide.BUY),
-                ),
+              // We stop iterating if it becomes 0n at some point
+              let lastOutput = 1n;
+              let dataList: [bigint, number][] = await Promise.all(
+                amounts.map(amount => {
+                  if (amount === 0n) {
+                    return [0n, 0];
+                  }
+                  // We don't want to proceed with calculations if lower amount was not fillable
+                  if (lastOutput === 0n) {
+                    return [0n, 0];
+                  }
+                  const output = pool.swap(
+                    amount,
+                    from,
+                    to,
+                    side == SwapSide.BUY,
+                  );
+                  lastOutput = output[0];
+                  return output;
+                }),
               );
+
               let prices = dataList.map(d => d[0]);
               let gasCosts: number[] = dataList.map(
                 ([d, t]: [BigInt, number]) => {
                   if (d == 0n) return 0;
-                  let gasCost = MAV_V1_BASE_GAS_COST;
-                  for (let i = 0; i <= t; i++) {
-                    let state = pool.getState(blockNumber);
-                    let activeTick = state!.activeTick + BigInt(i!);
-                    let kindCount = 0;
-                    for (let k = 0; k < 4; k++) {
-                      if (
-                        state!.binPositions[activeTick.toString()][
-                          k.toString()
-                        ] === undefined
-                      )
-                        continue;
-                      kindCount++;
-                    }
-                    gasCost += MAV_V1_TICK_GAS_COST;
-                    gasCost += MAV_V1_KIND_GAS_COST * (kindCount - 1);
-                  }
-                  return gasCost;
+                  // I think it is reasonable estimation assuming "kind" gas cost is almost everytime around 1
+                  return (
+                    MAV_V1_BASE_GAS_COST +
+                    (MAV_V1_TICK_GAS_COST + MAV_V1_KIND_GAS_COST) * t
+                  );
                 },
               );
               return {
@@ -264,6 +302,10 @@ export class MaverickV1
                 poolAddresses: [pool.address],
               };
             } catch (e) {
+              this.logger.debug(
+                `Failed to get prices for pool ${pool.address}, from=${from.address}, to=${to.address}`,
+                e,
+              );
               return null;
             }
           }),
@@ -291,7 +333,7 @@ export class MaverickV1
     data: MaverickV1Data,
     side: SwapSide,
   ): AdapterExchangeParam {
-    const { deadline, pool } = data;
+    const { pool } = data;
     const payload = this.abiCoder.encodeParameter(
       {
         ParentStruct: {
@@ -301,7 +343,7 @@ export class MaverickV1
       },
       {
         pool,
-        deadline: deadline || this.getDeadline(),
+        deadline: getLocalDeadlineAsFriendlyPlaceholder(), // FIXME: more gas efficient to pass block.timestamp in adapter
       },
     );
 
@@ -329,7 +371,7 @@ export class MaverickV1
       side === SwapSide.SELL
         ? {
             recipient: this.augustusAddress,
-            deadline: this.getDeadline(),
+            deadline: getLocalDeadlineAsFriendlyPlaceholder(),
             amountIn: srcAmount,
             amountOutMinimum: destAmount,
             tokenIn: srcToken,
@@ -339,7 +381,7 @@ export class MaverickV1
           }
         : {
             recipient: this.augustusAddress,
-            deadline: this.getDeadline(),
+            deadline: getLocalDeadlineAsFriendlyPlaceholder(),
             amountOut: destAmount,
             amountInMaximum: srcAmount,
             tokenIn: srcToken,
