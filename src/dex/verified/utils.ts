@@ -1,7 +1,4 @@
-import { getAddress } from '@ethersproject/address';
 import { Interface, Result } from '@ethersproject/abi';
-import { getBigIntPow } from '../../utils';
-import { BI_POWS } from '../../bigint-constants';
 
 import {
   VerifiedPoolTypes,
@@ -9,20 +6,16 @@ import {
   SubgraphPoolAddressDictionary,
   SubgraphPoolBase,
   SubgraphToken,
+  PoolState,
 } from './types';
-import { reverse, uniqBy } from 'lodash';
+
+import { DeepReadonly } from 'ts-essentials';
+import _ from 'lodash';
 
 interface BalancerPathHop {
   pool: SubgraphPoolBase;
   tokenIn: SubgraphToken;
   tokenOut: SubgraphToken;
-}
-
-export const isSameAddress = (address1: string, address2: string): boolean =>
-  getAddress(address1) === getAddress(address2);
-
-export function getTokenScalingFactor(tokenDecimals: number): bigint {
-  return BI_POWS[18] * getBigIntPow(18 - tokenDecimals);
 }
 
 export function decodeThrowError(
@@ -39,57 +32,12 @@ export function decodeThrowError(
   );
 }
 
-// export function poolGetPathForTokenInOut(
-//   tokenInAddress: string,
-//   tokenOutAddress: string,
-//   pool: SubgraphPoolBase,
-//   poolsMap: SubgraphPoolAddressDictionary,
-// ): BalancerPathHop[] {
-//   const tokenIn = findRequiredMainTokenInPool(tokenInAddress, pool);
-//   const tokenOut = findRequiredMainTokenInPool(tokenOutAddress, pool);
-
-//   const tokenInHops: BalancerPathHop[] = reverse([...tokenIn.pathToToken]).map(
-//     hop => ({
-//       pool: poolsMap[hop.poolAddress],
-//       tokenIn: hop.token,
-//       tokenOut: { address: hop.poolAddress, decimals: 18 },
-//     }),
-//   );
-
-//   const tokenOutHops: BalancerPathHop[] = tokenOut.pathToToken.map(hop => ({
-//     pool: poolsMap[hop.poolAddress],
-//     tokenIn: { address: hop.poolAddress, decimals: 18 },
-//     tokenOut: hop.token,
-//   }));
-
-//   return [
-//     ...tokenInHops,
-//     { pool, tokenIn: tokenIn.poolToken, tokenOut: tokenOut.poolToken },
-//     ...tokenOutHops,
-//   ];
-// }
-
-// export function getAllPoolsUsedInPaths(
-//   from: string,
-//   to: string,
-//   allowedPools: SubgraphPoolBase[],
-//   poolAddressMap: SubgraphPoolAddressDictionary,
-// ) {
-//   //get all pools from the nested paths
-//   return uniqBy(
-//     allowedPools
-//       .map(pool =>
-//         poolGetPathForTokenInOut(
-//           from.toLowerCase(),
-//           to.toLowerCase(),
-//           pool,
-//           poolAddressMap,
-//         ).map(hop => hop.pool),
-//       )
-//       .flat(),
-//     'address',
-//   );
-// }
+export function isSupportedPool(poolType: string): boolean {
+  return (
+    poolType == VerifiedPoolTypes.PrimaryIssuePool ||
+    poolType == VerifiedPoolTypes.SecondaryIssuePool
+  );
+}
 
 //Todo: confirm this handles both primary and secondary
 export function poolGetMainTokens(
@@ -99,13 +47,12 @@ export function poolGetMainTokens(
   let mainTokens: SubgraphMainToken[] = [];
 
   for (const token of pool.tokens) {
-    //skip
+    //skip bpt token
     if (token.address === pool.address) {
       continue;
     }
     const tokenPool = poolsMap[token.address];
-    if (tokenPool && isPrimaryPool(tokenPool.poolType)) {
-      //since primary main token is the security token used
+    if (tokenPool && isSupportedPool(tokenPool.poolType)) {
       const securityToken = pool.tokens.find(token => {
         token.address === tokenPool.security;
       })!;
@@ -117,22 +64,6 @@ export function poolGetMainTokens(
             poolId: tokenPool.id,
             poolAddress: tokenPool.address,
             token: securityToken,
-          },
-        ],
-      });
-    } else if (tokenPool && isSecondaryPool(tokenPool.poolType)) {
-      //since secondary main token is the currency token used
-      const currency = pool.tokens.find(token => {
-        token.address === tokenPool.currency;
-      })!;
-      mainTokens.push({
-        ...currency,
-        poolToken: token,
-        pathToToken: [
-          {
-            poolId: tokenPool.id,
-            poolAddress: tokenPool.address,
-            token: currency,
           },
         ],
       });
@@ -148,25 +79,12 @@ export function poolGetMainTokens(
   return mainTokens;
 }
 
-function isPrimaryPool(poolType: string): boolean {
-  return poolType == VerifiedPoolTypes.PrimaryIssuePool;
+export function getNewAmount(max: bigint, num: bigint): bigint {
+  return max >= num ? num : 0n;
 }
 
-function isSecondaryPool(poolType: string): boolean {
-  return poolType == VerifiedPoolTypes.SecondaryIssuePool;
+export function typecastReadOnlyPoolState(
+  pool: DeepReadonly<PoolState>,
+): PoolState {
+  return _.cloneDeep(pool) as PoolState;
 }
-
-// function findRequiredMainTokenInPool(
-//   tokenToFind: string,
-//   pool: SubgraphPoolBase,
-// ): SubgraphMainToken {
-//   const mainToken = pool.mainTokens.find(
-//     token => token.address.toLowerCase() === tokenToFind.toLowerCase(),
-//   );
-
-//   if (!mainToken) {
-//     throw new Error(`Main token does not exist in pool: ${tokenToFind}`);
-//   }
-
-//   return mainToken;
-// }

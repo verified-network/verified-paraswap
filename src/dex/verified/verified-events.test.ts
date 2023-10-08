@@ -3,11 +3,13 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { VerifiedEventPool } from './verified-pool';
-import { Network } from '../../constants';
-import { Address } from '../../types';
+import { Network, SwapSide } from '../../constants';
+import { Address, Token } from '../../types';
 import { DummyDexHelper } from '../../dex-helper/index';
 import { testEventSubscriber } from '../../../tests/utils-events';
-import { PoolState } from './types';
+import { PoolState, PoolStateMap, SubgraphPoolBase } from './types';
+import { VerifiedConfig } from './config';
+import { assert } from 'console';
 
 /*
   README
@@ -45,36 +47,40 @@ import { PoolState } from './types';
 jest.setTimeout(50 * 1000);
 
 async function fetchPoolState(
-  verifiedPools: VerifiedEventPool,
+  verifiedPool: VerifiedEventPool,
   blockNumber: number,
-  poolAddress: string,
-): Promise<PoolState> {
-  // TODO: complete me!
-  return {};
+): Promise<PoolStateMap> {
+  return await verifiedPool.generateState(blockNumber);
 }
 
 // eventName -> blockNumbers
 type EventMappings = Record<string, number[]>;
 
-describe('Verified EventPool Mainnet', function () {
-  const dexKey = 'Verified';
-  const network = Network.MAINNET;
+describe('Verified EventPool', function () {
+  const parentName = 'Verified'; //DexKey or DexName
+  const network = Network.POLYGON;
+  const networkConfig = VerifiedConfig[parentName][network];
   const dexHelper = new DummyDexHelper(network);
-  const logger = dexHelper.getLogger(dexKey);
-  let verifiedPool: VerifiedEventPool;
+  const logger = dexHelper.getLogger(parentName);
 
   // poolAddress -> EventMappings
   const eventsToTest: Record<Address, EventMappings> = {
-    // TODO: complete me!
+    '0x1871c8321b099c3c0e8a69340a8bf93f3d4b1c9a': {
+      Swap: [48391093],
+    },
+    '0x1b96d5660be3e948ddf331aa05e46c59c6a832f4': {
+      Swap: [48391093],
+    },
   };
-
+  let verifiedPool: VerifiedEventPool;
   beforeEach(async () => {
     verifiedPool = new VerifiedEventPool(
-      dexKey,
+      parentName,
       network,
       dexHelper,
+      networkConfig.vaultAddress,
+      networkConfig.subGraphUrl,
       logger,
-      /* TODO: Put here additional constructor arguments if needed */
     );
   });
 
@@ -90,9 +96,9 @@ describe('Verified EventPool Mainnet', function () {
                     verifiedPool,
                     verifiedPool.addressesSubscribed,
                     (_blockNumber: number) =>
-                      fetchPoolState(verifiedPool, _blockNumber, poolAddress),
+                      fetchPoolState(verifiedPool, _blockNumber),
                     blockNumber,
-                    `${dexKey}_${poolAddress}`,
+                    `${parentName}_${poolAddress}`,
                     dexHelper.provider,
                   );
                 });
@@ -103,4 +109,77 @@ describe('Verified EventPool Mainnet', function () {
       });
     },
   );
+
+  describe('Custom Test', () => {
+    it('All pools test: ', async () => {
+      console.log(
+        'allPools before fetching pool state: ',
+        verifiedPool.allPools,
+      );
+      const poolsMap = await fetchPoolState(verifiedPool, 48391093);
+      console.log(
+        'allPools after fetching pool state: ',
+        verifiedPool.allPools,
+      );
+      //other tests
+      Object.entries(poolsMap).forEach(([poolAddress, poolState]) => {
+        const subgraphPool = verifiedPool.allPools.find(
+          pool => pool.address.toLowerCase() === poolAddress.toLowerCase(),
+        );
+        //test for maintokens: (must not include bpt token/poolAddress)
+        subgraphPool?.mainTokens.forEach(token => {
+          assert(
+            token.address !== poolAddress,
+            'Maintokens Test Failed: Maintokens contain bpt/pool token',
+          );
+        });
+        let tokens: Token[] = [];
+        subgraphPool?.mainTokens.forEach(token => {
+          const _token = subgraphPool.tokens.find(
+            t => t.address === token.address,
+          );
+          tokens.push({
+            address: _token?.address!,
+            decimals: _token?.decimals!,
+          });
+        });
+        const price1 = verifiedPool.getPricesPool(
+          tokens[0],
+          tokens[1],
+          subgraphPool!,
+          poolState,
+          [0n, 745000000000000000n],
+          745000000000000000n,
+          SwapSide.SELL,
+        );
+        // const price2 = verifiedPool.getPricesPool(tokens[0], tokens[1], subgraphPool!, poolState, [BigInt(10), BigInt(5)], BigInt(6), SwapSide.BUY)
+        const price3 = verifiedPool.getPricesPool(
+          tokens[1],
+          tokens[0],
+          subgraphPool!,
+          poolState,
+          [0n, 2126543n],
+          BigInt(6),
+          SwapSide.SELL,
+        );
+        // const price4 = verifiedPool.getPricesPool(tokens[1], tokens[0], subgraphPool!, poolState, [BigInt(10), BigInt(5)], BigInt(6), SwapSide.BUY)
+        console.log(
+          subgraphPool?.poolType,
+          ' Sell Price: for ',
+          tokens[0],
+          ' : ',
+          price1,
+        );
+        // console.log(subgraphPool?.poolType,  " Buy Price: for ",  tokens[0], " : ", price2);
+        console.log(
+          subgraphPool?.poolType,
+          ' Sell Price: for ',
+          tokens[1],
+          ' : ',
+          price3,
+        );
+        // console.log(subgraphPool?.poolType,  " Buy Price: for ",  tokens[1], " : ", price4);
+      });
+    });
+  });
 });
