@@ -17,21 +17,6 @@ import { VerifiedData, VerifiedParam } from './types';
 import { SmartTokenParams } from '../../../tests/smart-tokens';
 import { PoolPrices } from '../../types';
 
-/*
-  README
-  ======
-
-  This test script adds tests for Verified general integration
-  with the DEX interface. The test cases below are example tests.
-  It is recommended to add tests which cover Verified specific
-  logic.
-
-  You can run this individual test script by running:
-  `npx jest src/dex/<dex-name>/<dex-name>-integration.test.ts`
-
-  (This comment should be removed from the final implementation)
-*/
-
 function getReaderCalldata(
   exchangeAddress: string,
   readerIface: Interface,
@@ -189,17 +174,16 @@ describe('Verified Integration Tests', function () {
   const srcTokenSymbol = 'USDC';
   const destTokenSymbol = 'CH1265330';
 
-  //stop at 2 USDC(2000000) because current USDC balance is 2.25016(2250160) from the pool
-  //anything above the balance when selling will give 0 price
+  //stop at 2 USDC(2000000) because to avoid 0 prices current USDC balance is 2.25016(2250160)
+  //anything above the balance when buying will give 0 price
   const usdcAmounts = [
     0n,
     1n * BI_POWS[tokens[srcTokenSymbol].decimals],
     2n * BI_POWS[tokens[srcTokenSymbol].decimals],
   ];
 
-  //stop at 3 CH1265330(3000000000000000000 CH1265330) to avoid 0 price because when you attempt to sell 4 CH1265330
-  //the return will be more than 2.25016 USDC which is above the current USDC balance from pool.
-  const ch1265330Amounts = [
+  //stop at 3 (3000000000000000000) to keep it minimal
+  const securityAmounts = [
     0n,
     1n * BI_POWS[tokens[destTokenSymbol].decimals],
     2n * BI_POWS[tokens[destTokenSymbol].decimals],
@@ -214,7 +198,7 @@ describe('Verified Integration Tests', function () {
     }
   });
 
-  it('getPoolIdentifiers and getPricesVolume **SELL** for USDC in CH1265330 out', async function () {
+  it('getPoolIdentifiers and getPricesVolume **SELL** for USDC in Security out', async function () {
     const a = await testPricingOnNetwork(
       verified,
       network,
@@ -228,21 +212,21 @@ describe('Verified Integration Tests', function () {
     );
   });
 
-  it('getPoolIdentifiers and getPricesVolume **SELL** for CH1265330 in USDC out', async function () {
+  it('getPoolIdentifiers and getPricesVolume **SELL** for Security in USDC out', async function () {
     const a = await testPricingOnNetwork(
       verified,
       network,
       dexKey,
       blockNumber,
-      destTokenSymbol, //CH1265330 is now srcToken
+      destTokenSymbol, //Security Token is now srcToken
       srcTokenSymbol,
       SwapSide.SELL,
-      ch1265330Amounts, //amount will be amount in/srcToken amount since we are selling
+      securityAmounts, //amount will be amount in/srcToken amount since we are selling
       'queryBatchSwap',
     );
   });
 
-  it('getPoolIdentifiers and getPricesVolume **BUY** for USDC in CH1265330 out', async function () {
+  it('getPoolIdentifiers and getPricesVolume **BUY** for USDC in Security out', async function () {
     await testPricingOnNetwork(
       verified,
       network,
@@ -251,19 +235,19 @@ describe('Verified Integration Tests', function () {
       srcTokenSymbol,
       destTokenSymbol,
       SwapSide.BUY,
-      ch1265330Amounts, //amount will be amount out/destToken amount since we are buying
+      securityAmounts, //amount will be amount out/destToken amount since we are buying
       'queryBatchSwap',
     );
   });
 
   //will return 0 prices due to minimumOrderSize of the pool
-  it('getPoolIdentifiers and getPricesVolume **BUY** for CH1265330 in USDC out', async function () {
+  it('getPoolIdentifiers and getPricesVolume **BUY** for Security in USDC out', async function () {
     await testPricingOnNetwork(
       verified,
       network,
       dexKey,
       blockNumber,
-      destTokenSymbol, //CH1265330 is now srcToken
+      destTokenSymbol, //Security Token is now srcToken
       srcTokenSymbol,
       SwapSide.BUY,
       usdcAmounts, //amount will be amount out/destToken amount since we are buying
@@ -277,16 +261,16 @@ describe('Verified Integration Tests', function () {
       networkTokens[srcTokenSymbol].address,
       10,
     );
-    const ch1265330PoolLiquidity = await verified.getTopPoolsForToken(
+    const securityPoolLiquidity = await verified.getTopPoolsForToken(
       networkTokens[destTokenSymbol].address,
       10,
     );
     console.log(srcTokenSymbol, ' Top Pools:', usdcPoolLiquidity);
-    console.log(destTokenSymbol, ' Top Pools:', ch1265330PoolLiquidity);
+    console.log(destTokenSymbol, ' Top Pools:', securityPoolLiquidity);
 
     expect(
       usdcPoolLiquidity.map(pool =>
-        ch1265330PoolLiquidity.find(
+        securityPoolLiquidity.find(
           _pool => pool.address.toLowerCase() === _pool.address.toLowerCase(),
         ),
       ),
@@ -300,7 +284,7 @@ describe('Verified Integration Tests', function () {
     //     dexKey,
     //   );
     //   checkPoolsLiquidity(
-    //     ch1265330PoolLiquidity,
+    //     securityPoolLiquidity,
     //     networkTokens[destTokenSymbol].address,
     //     dexKey,
     //   );

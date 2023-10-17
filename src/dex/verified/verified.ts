@@ -82,7 +82,6 @@ export class Verified
 
   logger: Logger;
   nonEventPoolStateCache: PoolStateCache;
-
   constructor(
     readonly network: Network,
     readonly dexKey: string,
@@ -103,7 +102,6 @@ export class Verified
     );
     this.nonEventPoolStateCache = { blockNumber: 0, poolState: {} };
   }
-
   // Initialize pricing is called once in the start of
   // pricing service. It is intended to setup the integration
   // for pricing requests. set states for event pools
@@ -152,11 +150,8 @@ export class Verified
       ({ address }) => `${this.dexKey}_${address.toLowerCase()}`,
     );
   }
-
-  // Returns pool prices for amounts.
-  // If limitPools is defined only pools in limitPools
-  // should be used. If limitPools is undefined then
-  // any pools can be used.
+  // Returns pool prices for amounts. amounnt must be an array with 0 as first element: [0n, amounts]
+  // If limitPools is defined only pools in limitPools will be used
   async getPricesVolume(
     srcToken: Token, //From Token
     destToken: Token, //Token To
@@ -434,6 +429,11 @@ export class Verified
     ];
 
     return params;
+  }
+
+  getTokenFromAddress(address: Address): Token {
+    // In this Dex decimals are not used
+    return { address, decimals: 0 };
   }
 
   //checks if vault has been preapproved to have access to amount of from token
